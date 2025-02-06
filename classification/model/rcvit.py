@@ -110,9 +110,6 @@ class LocalIntegration(nn.Module):
 
 
 class AdditiveTokenMixer(nn.Module):
-    """
-    改变了proj函数的输入，不对q+k卷积，而是对融合之后的结果proj
-    """
     def __init__(self, dim=512, attn_bias=False, proj_drop=0.):
         super().__init__()
         self.qkv = nn.Conv2d(dim, 3 * dim, 1, stride=1, padding=0, bias=attn_bias)
@@ -205,7 +202,6 @@ class RCViT(nn.Module):
                 )
 
         self.network = nn.ModuleList(network)
-
         if self.fork_feat:
             # add a norm layer for each output
             self.out_indices = [0, 2, 4, 6]
@@ -219,8 +215,11 @@ class RCViT(nn.Module):
         else:
             # Classifier head
             self.norm = norm_layer(embed_dims[-1])
+            self.linner = nn.Linear(embed_dims[-1], embed_dims[-1] // 2)
+            self.activation = nn.ReLU()
+            self.drop = nn.Dropout(drop_path_rate)
             self.head = nn.Linear(
-                embed_dims[-1], num_classes) if num_classes > 0 \
+                embed_dims[-1] // 2, num_classes) if num_classes > 0 \
                 else nn.Identity()
             self.dist = distillation
             if self.dist:
@@ -300,7 +299,10 @@ class RCViT(nn.Module):
             if not self.training:
                 cls_out = (cls_out[0] + cls_out[1]) / 2
         else:
-            cls_out = self.head(x.flatten(2).mean(-1))
+            x = self.linner(x.flatten(2).mean(-1))
+            x = self.activation(x)
+            x = self.drop(x)
+            cls_out = self.head(x)
         # for image classification
         return cls_out
 
@@ -311,7 +313,7 @@ def rcvit_xs(**kwargs):
     model = RCViT(
         layers=[2, 2, 4, 2], embed_dims=[48, 56, 112, 220], mlp_ratios=4, downsamples=[True, True, True, True],
         norm_layer=nn.BatchNorm2d, attn_bias=False, act_layer=nn.GELU, drop_rate=0.,
-        fork_feat=False, init_cfg=None, **kwargs)
+        fork_feat=False , init_cfg=None, **kwargs)
     return model
 
 @register_model

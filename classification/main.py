@@ -46,8 +46,7 @@ def get_args_parser():
     parser.add_argument('--batch_size', default=256, type=int,
                         help='Per GPU batch size')
     parser.add_argument('--epochs', default=300, type=int)
-    parser.add_argument('--update_freq', default=2, type=int,
-                        help='gradient accumulation steps')
+    parser.add_argument('--update_freq', default=2, type=int,help='gradient accumulation steps')
 
     # Model parameters
     parser.add_argument('--model', default='rcvit_xs', type=str, metavar='MODEL',
@@ -206,6 +205,7 @@ def get_args_parser():
 def main(args):
     utils.init_distributed_mode(args)
     print(args)
+
     device = torch.device(args.device)
 
     # init the logger name before other steps
@@ -227,12 +227,17 @@ def main(args):
     np.random.seed(seed)
     cudnn.benchmark = True
 
+    temp = args.nb_classes
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
+    args.nb_classes = temp
+
     if args.disable_eval:
         args.dist_eval = False
         dataset_val = None
     else:
         dataset_val, _ = build_dataset(is_train=False, args=args)
+        args.nb_classes = temp
+        
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
@@ -426,6 +431,8 @@ def main(args):
     print(f"Total Trainable Params: {round(total_params * 1e-6, 2)} M")
     # print(f"MAdds: {round(model_flops * 1e-6, 2)} M")
 
+    print (f"========================== {args.nb_classes}")
+
     print("Start training for %d epochs" % args.epochs)
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -437,6 +444,7 @@ def main(args):
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         if wandb_logger:
             wandb_logger.set_steps()
+        
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
@@ -445,6 +453,7 @@ def main(args):
             num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq,
             use_amp=args.use_amp
         )
+        
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
