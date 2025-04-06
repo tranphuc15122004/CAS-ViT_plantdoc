@@ -323,11 +323,20 @@ def main(args):
         classifier_dropout=args.classifier_dropout,
         distillation=False,
     )
+    
     if args.finetune:
         checkpoint = torch.load(args.finetune, map_location="cpu")
         state_dict = checkpoint[model_state_dict_name]
         utils.load_state_dict(model, state_dict)
         print(f"Finetune resume checkpoint: {args.finetune}")
+        
+    for name, param in model.named_parameters():
+        # Nếu tên chứa các từ khóa của classifier head thì giữ lại
+        if any(keyword in name for keyword in ['head', 'linner', 'activation', 'drop', 'dist_head', 'norm']):
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+    
     model.to(device)
 
     model_ema = None

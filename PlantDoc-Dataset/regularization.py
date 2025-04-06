@@ -3,10 +3,10 @@ import cv2
 from tqdm import tqdm
 
 # Thư mục chứa dữ liệu huấn luyện
-data_dir = "val"  # Thay bằng đường dẫn thực tế
+data_dir = "C:/PHUC/CAS-ViT_plantdoc/PlantDoc-Dataset/val"  
 
 # Kích thước đích cho ảnh
-target_size = (224, 224)  # Bạn có thể thay đổi tùy ý
+target_size = (256, 256) 
 
 # Duyệt qua toàn bộ thư mục và xử lý ảnh
 for root, _, files in os.walk(data_dir):
