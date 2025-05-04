@@ -5,9 +5,7 @@ from collections import defaultdict, deque
 import datetime
 import numpy as np
 from timm.utils import get_state_dict
-
 from pathlib import Path
-
 import torch
 import torch.distributed as dist
 inf = float('inf')
@@ -35,6 +33,7 @@ class SmoothedValue(object):
         self.count += n
         self.total += value * n
 
+    # đồng bộ giữa các tiến trình trong huấn luyện phân tán
     def synchronize_between_processes(self):
         """
         Warning: does not synchronize the deque!
@@ -78,7 +77,7 @@ class SmoothedValue(object):
             max=self.max,
             value=self.value)
 
-
+# Cần sửa nếu muốn chuyển mô hình qua multi label classification
 class MetricLogger(object):
     def __init__(self, delimiter="\t"):
         self.meters = defaultdict(SmoothedValue)
@@ -109,6 +108,7 @@ class MetricLogger(object):
             )
         return self.delimiter.join(loss_str)
 
+    # dùng cho việc đồng bộ trên các tiến trình huấn luyện phân tán
     def synchronize_between_processes(self):
         for meter in self.meters.values():
             meter.synchronize_between_processes()
@@ -301,8 +301,7 @@ def init_distributed_mode(args):
         ntasks = int(os.environ['SLURM_NTASKS'])
         node_list = os.environ['SLURM_NODELIST']
         num_gpus = torch.cuda.device_count()
-        addr = subprocess.getoutput(
-            'scontrol show hostname {} | head -n1'.format(node_list))
+        addr = subprocess.getoutput(f'scontrol show hostname {node_list} | head -n1')
         os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '29500')
         os.environ['MASTER_ADDR'] = addr
         os.environ['WORLD_SIZE'] = str(ntasks)
@@ -325,8 +324,7 @@ def init_distributed_mode(args):
 
     torch.cuda.set_device(args.gpu)
     args.dist_backend = 'nccl'
-    print('| distributed init (rank {}): {}'.format(
-        args.rank, args.dist_url), flush=True)
+    print(f'| distributed init (rank {args.rank}): {args.dist_url}', flush=True)
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
@@ -369,16 +367,16 @@ def load_state_dict(model, state_dict, prefix='', ignore_missing="relative_posit
 
     missing_keys = warn_missing_keys
 
-    if len(missing_keys) > 0:
+    if missing_keys:
         print("Weights of {} not initialized from pretrained model: {}".format(
             model.__class__.__name__, missing_keys))
-    if len(unexpected_keys) > 0:
+    if unexpected_keys:
         print("Weights from pretrained model not used in {}: {}".format(
             model.__class__.__name__, unexpected_keys))
-    if len(ignore_missing_keys) > 0:
+    if ignore_missing_keys:
         print("Ignored weights of {} not initialized from pretrained model: {}".format(
             model.__class__.__name__, ignore_missing_keys))
-    if len(error_msgs) > 0:
+    if error_msgs:
         print('\n'.join(error_msgs))
 
 
@@ -415,8 +413,8 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
     parameters = [p for p in parameters if p.grad is not None]
-    norm_type = float(norm_type)
-    if len(parameters) == 0:
+    norm_type = norm_type
+    if not parameters:
         return torch.tensor(0.)
     device = parameters[0].grad.device
     if norm_type == inf:
@@ -473,17 +471,7 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, mo
 def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, model_ema=None, state_dict_name='model'):
     output_dir = Path(args.output_dir)
     if args.auto_resume and len(args.resume) == 0:
-        import glob
-        all_checkpoints = glob.glob(os.path.join(output_dir, 'checkpoint-*.pth'))
-        latest_ckpt = -1
-        for ckpt in all_checkpoints:
-            t = ckpt.split('-')[-1].split('.')[0]
-            if t.isdigit():
-                latest_ckpt = max(int(t), latest_ckpt)
-        if latest_ckpt >= 0:
-            args.resume = os.path.join(output_dir, 'checkpoint-%d.pth' % latest_ckpt)
-        print("Auto resume checkpoint: %s" % args.resume)
-
+        _extracted_from_auto_load_model_4(output_dir, args)
     if args.resume:
         if args.resume.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -491,7 +479,7 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
         model_without_ddp.load_state_dict(checkpoint[state_dict_name])
-        print("Resume checkpoint %s" % args.resume)
+        print(f"Resume checkpoint {args.resume}")
         if 'optimizer' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             if not isinstance(checkpoint['epoch'], str): # does not support resuming with 'best', 'best-ema'
@@ -506,3 +494,17 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
             if 'scaler' in checkpoint:
                 loss_scaler.load_state_dict(checkpoint['scaler'])
             print("With optim & sched!")
+
+
+# TODO Rename this here and in `auto_load_model`
+def _extracted_from_auto_load_model_4(output_dir, args):
+    import glob
+    all_checkpoints = glob.glob(os.path.join(output_dir, 'checkpoint-*.pth'))
+    latest_ckpt = -1
+    for ckpt in all_checkpoints:
+        t = ckpt.split('-')[-1].split('.')[0]
+        if t.isdigit():
+            latest_ckpt = max(int(t), latest_ckpt)
+    if latest_ckpt >= 0:
+        args.resume = os.path.join(output_dir, 'checkpoint-%d.pth' % latest_ckpt)
+    print(f"Auto resume checkpoint: {args.resume}")

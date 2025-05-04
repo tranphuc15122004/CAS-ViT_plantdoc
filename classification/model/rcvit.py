@@ -134,8 +134,6 @@ class AdditiveTokenMixer(nn.Module):
         out = self.proj_drop(out)
         return out
 
-
-
 class AdditiveBlock(nn.Module):
     """
     """
@@ -175,8 +173,8 @@ def Stage(dim, index, layers, mlp_ratio=4., act_layer=nn.GELU, attn_bias=False, 
 
 class RCViT(nn.Module):
     def __init__(self, layers, embed_dims, mlp_ratios=4, downsamples=[True, True, True, True], norm_layer=nn.BatchNorm2d, attn_bias=False,
-                 act_layer=nn.GELU, num_classes=1000, drop_rate=0., drop_path_rate=0., fork_feat=False,
-                 init_cfg=None, pretrained=None, distillation=True, **kwargs):
+                act_layer=nn.GELU, num_classes=1000, drop_rate=0., drop_path_rate=0., fork_feat=False,
+                init_cfg=None, pretrained=None, distillation=True, **kwargs):
         super().__init__()
 
         if not fork_feat:
@@ -188,7 +186,7 @@ class RCViT(nn.Module):
         network = []
         for i in range(len(layers)):
             stage = Stage(embed_dims[i], i, layers, mlp_ratio=mlp_ratios, act_layer=act_layer,
-                          attn_bias=attn_bias, drop=drop_rate, drop_path_rate=drop_path_rate)
+                        attn_bias=attn_bias, drop=drop_rate, drop_path_rate=drop_path_rate)
 
             network.append(stage)
             if i >= len(layers) - 1:
@@ -218,14 +216,10 @@ class RCViT(nn.Module):
             self.linner = nn.Linear(embed_dims[-1], embed_dims[-1] // 2)
             self.activation = nn.ReLU()
             self.drop = nn.Dropout(drop_path_rate)
-            self.head = nn.Linear(
-                embed_dims[-1] // 2, num_classes) if num_classes > 0 \
-                else nn.Identity()
+            self.head = nn.Linear(embed_dims[-1] // 2, num_classes) if num_classes > 0 else nn.Identity()
             self.dist = distillation
             if self.dist:
-                self.dist_head = nn.Linear(
-                    embed_dims[-1], num_classes) if num_classes > 0 \
-                    else nn.Identity()
+                self.dist_head = nn.Linear(embed_dims[-1], num_classes) if num_classes > 0 else nn.Identity()
 
         self.apply(self.cls_init_weights)
 

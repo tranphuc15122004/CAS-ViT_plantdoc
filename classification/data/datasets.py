@@ -36,9 +36,11 @@ def build_dataset(is_train, args):
             dataset = datasets.ImageFolder(root, transform=transform)
         nb_classes = 1000
     elif args.data_set == 'IMNET-A':
-	    assert not is_train, f'IMNET-A should only be used when Test'
-	    dataset = ImageNetADataset(args.data_path, is_train, transform=transform)
-	    nb_classes = 1000
+        assert not is_train, f'IMNET-A should only be used when Test'
+        dataset = ImageNetADataset(args.data_path, is_train, transform=transform)
+        nb_classes = 1000
+    
+    # với dataset custom
     elif args.data_set == "image_folder":
         root = args.data_path if is_train else args.eval_data_path
         dataset = datasets.ImageFolder(root, transform=transform)

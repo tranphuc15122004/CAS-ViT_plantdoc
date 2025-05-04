@@ -227,6 +227,7 @@ def main(args):
     np.random.seed(seed)
     cudnn.benchmark = True
 
+    # -- Build Dataset --
     temp = args.nb_classes
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     args.nb_classes = temp
@@ -237,7 +238,7 @@ def main(args):
     else:
         dataset_val, _ = build_dataset(is_train=False, args=args)
         args.nb_classes = temp
-        
+    
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
@@ -262,8 +263,6 @@ def main(args):
     else:
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
-    # if args.output_dir and args.log_dir is None:
-    #     args.log_dir = args.output_dir
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
         log_writer = utils.TensorboardLogger(log_dir=args.log_dir)
@@ -276,6 +275,7 @@ def main(args):
     else:
         wandb_logger = None
 
+    # --- khởi tạo dataloader cho bộ dữ liệu ---
     if args.multi_scale_sampler:
         data_loader_train = torch.utils.data.DataLoader(
             dataset_train, batch_sampler=sampler_train,
@@ -312,6 +312,8 @@ def main(args):
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
 
+
+    # Khởi tạo model
     model = create_model(
         args.model,
         pretrained=False,
@@ -323,19 +325,21 @@ def main(args):
         classifier_dropout=args.classifier_dropout,
         distillation=False,
     )
-    
+    # --- Load checkpoint ---
     if args.finetune:
         checkpoint = torch.load(args.finetune, map_location="cpu")
         state_dict = checkpoint[model_state_dict_name]
         utils.load_state_dict(model, state_dict)
         print(f"Finetune resume checkpoint: {args.finetune}")
-        
-    for name, param in model.named_parameters():
+    
+    # Đóng băng tham số 
+    # Phân này được tự thêm :)))
+    """ for name, param in model.named_parameters():
         # Nếu tên chứa các từ khóa của classifier head thì giữ lại
         if any(keyword in name for keyword in ['head', 'linner', 'activation', 'drop', 'dist_head', 'norm']):
             param.requires_grad = True
         else:
-            param.requires_grad = False
+            param.requires_grad = False """
     
     model.to(device)
 
@@ -374,9 +378,10 @@ def main(args):
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu],
-                                                          find_unused_parameters=args.find_unused_params)
+                                                        find_unused_parameters=args.find_unused_params)
         model_without_ddp = model.module
 
+    
     optimizer = create_optimizer(
         args, model_without_ddp, skip_list=None,
         get_num_layer=assigner.get_layer_id if assigner is not None else None,
@@ -391,12 +396,14 @@ def main(args):
         start_warmup_value=args.warmup_start_lr
     )
 
+    # Khởi tạo Weight decay
     if args.weight_decay_end is None:
         args.weight_decay_end = args.weight_decay
     wd_schedule_values = utils.cosine_scheduler(
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
+    # Khởi tạo hàm LOSS
     if mixup_fn is not None:
         # smoothing is handled with mixup label transform
         criterion = SoftTargetCrossEntropy()
@@ -407,6 +414,7 @@ def main(args):
 
     print("criterion = %s" % str(criterion))
 
+    # Load lại model với checkpoint và các tham số khác
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp,
         optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema, state_dict_name=model_state_dict_name)
@@ -441,7 +449,8 @@ def main(args):
     # print(f"MAdds: {round(model_flops * 1e-6, 2)} M")
 
     print (f"========================== {args.nb_classes}")
-
+    
+    # Bắt đầu quá trình train 
     print("Start training for %d epochs" % args.epochs)
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -463,11 +472,12 @@ def main(args):
             use_amp=args.use_amp
         )
         
+        # Lưu lại checkpoint
         if args.output_dir and args.save_ckpt:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
-                utils.save_model(
-                    args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                    loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
+                utils.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
+        
+        # Nếu có dữ liệu validate -> Đánh giá mô hình
         if data_loader_val is not None:
             test_stats = evaluate(data_loader_val, model, device, use_amp=args.use_amp)
             print(f"Accuracy of the model on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
@@ -484,29 +494,27 @@ def main(args):
                 log_writer.update(test_acc5=test_stats['acc5'], head="perf", step=epoch)
                 log_writer.update(test_loss=test_stats['loss'], head="perf", step=epoch)
 
-            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         **{f'test_{k}': v for k, v in test_stats.items()},
-                         'epoch': epoch,
-                         'n_parameters': n_parameters}
+            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},**{f'test_{k}': v for k, v in test_stats.items()},'epoch': epoch,'n_parameters': n_parameters}
 
             # Repeat testing routines for EMA, if ema eval is turned on
             if args.model_ema and args.model_ema_eval:
                 test_stats_ema = evaluate(data_loader_val, model_ema.ema, device, use_amp=args.use_amp)
                 print(f"Accuracy of the model EMA on {len(dataset_val)} test images: {test_stats_ema['acc1']:.1f}%")
+                
                 if max_accuracy_ema < test_stats_ema["acc1"]:
                     max_accuracy_ema = test_stats_ema["acc1"]
+                    
                     if args.output_dir and args.save_ckpt:
-                        utils.save_model(
-                            args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                        utils.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                             loss_scaler=loss_scaler, epoch=f"best-ema_{args.input_size}", model_ema=model_ema)
+                    
                 print(f'Max EMA accuracy: {max_accuracy_ema:.2f}%')
+                
                 if log_writer is not None:
                     log_writer.update(test_acc1_ema=test_stats_ema['acc1'], head="perf", step=epoch)
                 log_stats.update({**{f'test_{k}_ema': v for k, v in test_stats_ema.items()}})
         else:
-            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch,
-                         'n_parameters': n_parameters}
+            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},'epoch': epoch,'n_parameters': n_parameters}
 
         if args.output_dir and utils.is_main_process():
             if log_writer is not None:
@@ -526,12 +534,13 @@ def main(args):
             info = f"Total Max accuracy: {max(max_accuracy, max_accuracy_ema):.2f}, with max accuracy: {max_accuracy:.2f} and max EMA accuracy: {max_accuracy_ema:.2f}"
             f.write(json.dumps(info) + "\n")
 
-    # if max_accuracy > max_accuracy_ema:
-    #     shutil.copyfile(os.path.join(args.output_dir, f"checkpoint-best_{args.input_size}.pth"),
-    #                     os.path.join(args.output_dir, f"best_{args.input_size}_{max_accuracy:.2f}.pth"))
-    # else:
-    #     shutil.copyfile(os.path.join(args.output_dir, f"checkpoint-best-ema_{args.input_size}.pth"),
-    #                     os.path.join(args.output_dir, f"best_{args.input_size}_{max_accuracy_ema:.2f}.pth"))
+    """ if max_accuracy > max_accuracy_ema:
+        shutil.copyfile(os.path.join(args.output_dir, f"checkpoint-best_{args.input_size}.pth"),
+                    os.path.join(args.output_dir, f"best_{args.input_size}_{max_accuracy:.2f}.pth"))
+    else:
+        shutil.copyfile(os.path.join(args.output_dir, f"checkpoint-best-ema_{args.input_size}.pth"),
+                        os.path.join(args.output_dir, f"best_{args.input_size}_{max_accuracy_ema:.2f}.pth")) """
+    
     print(f"Total max accuracy: {max(max_accuracy, max_accuracy_ema):.2f}%")
 
 
