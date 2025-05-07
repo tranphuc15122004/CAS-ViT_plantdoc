@@ -3,9 +3,9 @@ from typing import Iterable, Optional
 import torch
 from timm.data import Mixup
 from timm.utils import accuracy, ModelEma
-
+from sklearn.metrics import f1_score, recall_score, roc_auc_score
 import utils
-
+import numpy as np
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -136,6 +136,11 @@ def evaluate(data_loader, model, device, use_amp=False):
 
     # Switch to evaluation mode
     model.eval()
+    
+    # Lists to store prediction and labels for F1, Recall , AUC
+    all_preds = []
+    all_probs = []
+    all_labels = []
     for batch in metric_logger.log_every(data_loader, 10, header):
         images = batch[0]
         target = batch[-1]
@@ -153,15 +158,51 @@ def evaluate(data_loader, model, device, use_amp=False):
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        # Compute predictions and probabilities for F1, Recall, AUC
+        probs = torch.softmax(output, dim=1)  # Convert logits to probabilities
+        preds = torch.argmax(probs, dim=1)  # Predicted class
+        
+        # Collect predictions, probabilities, and labels
+        all_preds.append(preds.cpu().numpy())
+        all_probs.append(probs.cpu().numpy())
+        all_labels.append(target.cpu().numpy())
 
         batch_size = images.shape[0]
         metric_logger.update(loss=loss.item())
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
         metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
     
+    # Concatenate all predictions, probabilities, and labels
+    all_preds = np.concatenate(all_preds)
+    all_probs = np.concatenate(all_probs)
+    all_labels = np.concatenate(all_labels)
+
+    # Compute F1, Recall, and AUC
+    f1 = f1_score(all_labels, all_preds, average='weighted')
+    recall = recall_score(all_labels, all_preds, average='weighted')
+
+    # AUC requires one-hot encoded labels for multi-class
+    num_classes = all_probs.shape[1]
+    auc = 0
+    if num_classes == 2:  # Binary classification
+        auc = roc_auc_score(all_labels, all_probs[:, 1])
+    else:  # Multi-class AUC using one-vs-rest
+        auc_scores = []
+        for i in range(num_classes):
+            try:
+                auc_score = roc_auc_score((all_labels == i).astype(int), all_probs[:, i])
+                auc_scores.append(auc_score)
+            except ValueError:
+                pass  # Skip if class not present in labels
+        auc = np.mean(auc_scores) if auc_scores else 0
+    
+    metric_logger.update(f1=f1)
+    metric_logger.update(recall=recall)
+    metric_logger.update(auc=auc)
+    
     # Gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
+    print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} F1 {f1:.3f} Recall {recall:.3f} AUC {auc:.3f} loss {losses.global_avg:.3f}'
+          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss , f1=f1, recall=recall, auc=auc))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}

@@ -493,6 +493,10 @@ def main(args):
                 log_writer.update(test_acc1=test_stats['acc1'], head="perf", step=epoch)
                 log_writer.update(test_acc5=test_stats['acc5'], head="perf", step=epoch)
                 log_writer.update(test_loss=test_stats['loss'], head="perf", step=epoch)
+                log_writer.update(test_f1=test_stats['f1'], head="perf", step=epoch)
+                log_writer.update(test_auc=test_stats['auc'], head="perf", step=epoch)
+                log_writer.update(test_recall=test_stats['recall'], head="perf", step=epoch)
+            
 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},**{f'test_{k}': v for k, v in test_stats.items()},'epoch': epoch,'n_parameters': n_parameters}
 
